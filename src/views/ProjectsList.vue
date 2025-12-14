@@ -2,7 +2,7 @@
   <div>
     <AppHeader />
     <div class="wrapper">
-      <div v-if="projectsStore.loading">Loading...</div>
+      <div class="flex center-xs box" v-if="projectsStore.loading">Loading...</div>
       <div class="flex center-xs box" v-else-if="projectsStore.error">{{ projectsStore.error }}</div>
       <ProjectsTable
         v-else
