@@ -29,7 +29,9 @@ const projectsStore = useProjectsStore();
 const tasksStore = useTasksStore();
 const { success, error } = UseNotifications();
 
-// Calculate task counts per project
+/**
+ * Calculate task counts per project
+ */
 const taskCounts = computed(() => {
   const counts: Record<number, number> = {};
   tasksStore.tasks.forEach(task => {
@@ -38,47 +40,42 @@ const taskCounts = computed(() => {
   return counts;
 });
 
-// Load data on mount
+/**
+ * Load data on mount
+ */
 onMounted(async () => {
-  console.log('Loading projects list data...');
-
-  // Load from localStorage first for faster display
   projectsStore.loadFromLocalStorage();
   tasksStore.loadFromLocalStorage();
 
   try {
-    // Fetch fresh data from API
     await Promise.all([
       projectsStore.fetchProjects(),
       tasksStore.fetchTasks()
     ]);
-
-    console.log('Data loaded successfully');
-    console.log('Projects:', projectsStore.projects.length);
-    console.log('Tasks:', tasksStore.tasks.length);
-
   } catch (err) {
-    console.error('Error loading data:', err);
     error('Failed to load data');
   }
 });
 
-// Navigate to project detail page
+/**
+ * Navigate to project detail page
+ */
 function goToProject(id: number) {
   router.push({ name: 'project-detail', params: { id } });
 }
 
-// Create new project with notification
+/**
+ * Create new project with notification
+ */
 async function createProject(data: { name: string; shortDescription?: string }) {
   try {
     await projectsStore.createProject({
-      ...data,
-      status: 'planned',
-      createdAt: new Date().toISOString()
-    });
+  ...data,
+  status: 'planned',
+  createdAt: new Date().toISOString()
+});
     success('Project created successfully');
   } catch (err) {
-    console.error('Error creating project:', err);
     error('Failed to create project');
   }
 }

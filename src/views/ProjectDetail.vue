@@ -3,7 +3,7 @@
     <AppHeader />
     <div class="wrapper">
       <button class="button button--secondary box" @click="$router.push('/')">
-        Back to Projects
+        ← Back to Projects
       </button>
 
       <div v-if="loading">Loading...</div>
@@ -27,6 +27,7 @@
                   <option value="completed">Completed</option>
                   <option value="planned">Planned</option>
                 </select>
+                <i class="fas fa-chevron-down form__select-icon"></i>
               </div>
             </div>
           </div>
@@ -44,13 +45,13 @@
               @click="viewMode = 'table'"
               :class="['button', viewMode === 'table' ? 'button--primary' : 'button--secondary']"
             >
-              Table View
+              <i class="fas fa-table"></i> Table
             </button>
             <button
               @click="viewMode = 'kanban'"
               :class="['button', viewMode === 'kanban' ? 'button--primary' : 'button--secondary']"
             >
-              Kanban View
+              <i class="fas fa-columns"></i> Kanban
             </button>
           </div>
         </div>
@@ -71,9 +72,9 @@
             :key="column.status"
             :title="column.title"
             :status="column.status"
-            :tasks="tasksByStatus[column.status]"
+            :tasks="tasksByStatus[column.status as 'todo' | 'in-progress' | 'done']"
             @edit-task="editTask"
-            @add-task="openTaskModal(column.status)"
+            @add-task="openTaskModal(column.status as Task['status'])"
             @task-moved="handleTaskMoved"
           />
         </div>
@@ -85,7 +86,7 @@
       :project-id="projectId"
       :initial-status="taskModalStatus"
       :edit-task="editingTask"
-      @close="isTaskModalOpen = false; editingTask = null"
+      @close="closeTaskModal"
       @submit="handleCreateTask"
       @update="handleUpdateTask"
     />
@@ -104,244 +105,210 @@ import TaskColumn from '@/components/tasks/TaskColumn.vue';
 import TasksTable from '@/components/tasks/TasksTable.vue';
 import type { Task } from '@/types/task.types';
 
+// -------------------------
+// Stores
+// -------------------------
 const route = useRoute();
 const projectsStore = useProjectsStore();
 const tasksStore = useTasksStore();
 const { success, error } = UseNotifications();
 
+// -------------------------
+// Reactive state (назви як у template)
+// -------------------------
 const loading = ref(true);
+const project = computed(() =>
+  projectsStore.projects.find(p => p.id === Number(route.params.id))
+);
 const projectId = Number(route.params.id);
+
 const isTaskModalOpen = ref(false);
-const taskModalStatus = ref('todo');
+const taskModalStatus = ref<'todo' | 'in-progress' | 'done'>('todo');
 const editingTask = ref<Task | null>(null);
 
-// Load view mode from localStorage
+// -------------------------
+// View mode
+// -------------------------
 const viewMode = ref<'table' | 'kanban'>(
   (localStorage.getItem('tasks-view-mode') as 'table' | 'kanban') || 'kanban'
 );
+watch(viewMode, mode => localStorage.setItem('tasks-view-mode', mode));
 
-// Save view mode to localStorage when changed
-watch(viewMode, (mode) => localStorage.setItem('tasks-view-mode', mode));
-
+// -------------------------
+// Kanban columns
+// -------------------------
 const taskColumns = [
   { status: 'todo', title: 'To Do' },
   { status: 'in-progress', title: 'In Progress' },
   { status: 'done', title: 'Done' }
 ];
 
-const project = computed(() =>
-  projectsStore.projects.find(project => project.id === projectId)
-);
-
 const projectTasks = computed(() =>
-  tasksStore.tasks.filter(task => task.projectId === projectId)
+  tasksStore.tasks.filter(t => t.projectId === projectId)
 );
 
-// Group tasks by status for Kanban view
 const tasksByStatus = computed(() => {
-  const result: Record<string, Task[]> = {
+  const result: Record<'todo' | 'in-progress' | 'done', Task[]> = {
     'todo': [],
     'in-progress': [],
     'done': []
   };
-
-  projectTasks.value.forEach(task => {
-    if (result[task.status]) {
-      result[task.status].push(task);
-    }
+  projectTasks.value.forEach(t => result[t.status].push(t));
+  Object.keys(result).forEach(key => {
+    const status = key as keyof typeof result;
+    result[status].sort((a, b) => a.order - b.order);
   });
-
-  // Sort tasks by order within each status
-  Object.keys(result).forEach(status => {
-    result[status].sort((firstTask, secondTask) => firstTask.order - secondTask.order);
-  });
-
   return result;
 });
 
-// Load data on mount with error handling
+// -------------------------
+// Lifecycle
+// -------------------------
 onMounted(async () => {
   try {
-    console.log('Loading data for project:', projectId);
-
-    // Load projects first
-    await projectsStore.fetchProjects();
-    console.log('Projects loaded:', projectsStore.projects.length);
-
-    // Load tasks
-    await tasksStore.fetchTasks();
-    console.log('Tasks loaded:', tasksStore.tasks.length);
-
-    // Check if project exists
-    if (!project.value) {
-      error('Project not found');
-    }
-
-  } catch (loadError) {
-    console.error('Error loading data:', loadError);
+    await Promise.all([projectsStore.fetchProjects(), tasksStore.fetchTasks()]);
+  } catch {
     error('Failed to load data');
   } finally {
     loading.value = false;
   }
 });
 
-// Update project status
+// -------------------------
+// Project status
+// -------------------------
 async function updateProjectStatus() {
   if (!project.value) return;
-
   try {
     await projectsStore.updateProject(projectId, { status: project.value.status });
     success('Project status updated');
-  } catch (updateError) {
-    console.error('Error updating project status:', updateError);
+  } catch {
     error('Failed to update project status');
   }
 }
 
-// Open task modal for creation
-function openTaskModal(status: string) {
+// -------------------------
+// Task modal
+// -------------------------
+function openTaskModal(status: Task['status']) {
   taskModalStatus.value = status;
   editingTask.value = null;
   isTaskModalOpen.value = true;
 }
-
-// Open task modal for editing
+function closeTaskModal() {
+  isTaskModalOpen.value = false;
+  editingTask.value = null;
+}
 function editTask(task: Task) {
   editingTask.value = task;
   taskModalStatus.value = task.status;
   isTaskModalOpen.value = true;
 }
 
-// Handle task creation
-async function handleCreateTask(data: any) {
+// -------------------------
+// Task CRUD
+// -------------------------
+async function handleCreateTask(data: {
+  projectId: number;
+  name: string;
+  status: string; // <- string від CreateTaskModal
+  dueDate: string;
+  description?: string;
+  assignee?: string;
+}) {
+
+  if (!['todo', 'in-progress', 'done'].includes(data.status)) {
+    data.status = 'todo';
+  }
+  const status = data.status as Task['status'];
+
+  const tasksInStatus = projectTasks.value.filter(t => t.status === status);
+  const maxOrder = tasksInStatus.length ? Math.max(...tasksInStatus.map(t => t.order)) : -1;
+
   try {
-    // Calculate order for new task
-    const tasksInStatus = projectTasks.value.filter(task => task.status === data.status);
-    const maxOrder = tasksInStatus.length > 0
-      ? Math.max(...tasksInStatus.map(task => task.order))
-      : -1;
-
-    await tasksStore.createTask({
-      projectId: data.projectId,
-      name: data.name,
-      status: data.status,
-      dueDate: data.dueDate,
-      order: maxOrder + 1,
-      ...(data.description && { description: data.description }),
-      ...(data.assignee && { assignee: data.assignee })
-    });
-
+    await tasksStore.createTask({ ...data, status, order: maxOrder + 1 });
     success('Task created successfully');
-  } catch (createError) {
-    console.error('Error creating task:', createError);
+  } catch {
     error('Failed to create task');
   }
 }
 
-// Handle task update
-async function handleUpdateTask(taskId: number | string, data: any) {
-  try {
-    await tasksStore.updateTask(taskId, {
-      name: data.name,
-      status: data.status,
-      dueDate: data.dueDate,
-      ...(data.description && { description: data.description }),
-      ...(data.assignee && { assignee: data.assignee })
-    });
 
+
+async function handleUpdateTask(taskId: string | number, data: { name: string; description?: string; assignee?: string; status: string; dueDate: string }) {
+  const id = Number(taskId);
+  const status = ['todo', 'in-progress', 'done'].includes(data.status) ? data.status as Task['status'] : 'todo';
+
+  try {
+    await tasksStore.updateTask(id, { ...data, status });
     success('Task updated successfully');
-  } catch (updateError) {
-    console.error('Error updating task:', updateError);
+  } catch {
     error('Failed to update task');
   }
 }
 
-// Handle task moved in Kanban (drag-and-drop)
-async function handleTaskMoved(taskId: number | string, newStatus: string, newOrder: number) {
-  if (!taskId || taskId === '' || (typeof taskId === 'number' && isNaN(taskId))) {
-    console.error('Invalid taskId:', taskId);
-    error('Failed to move task');
-    return;
+
+// -------------------------
+// Drag & Drop / Reorder
+// -------------------------
+async function handleTaskMoved(taskId: string | number, newStatus: string, newOrder: number) {
+  const id = Number(taskId);
+  const movedTask = projectTasks.value.find(t => t.id === id);
+  if (!movedTask) return error('Task not found');
+
+  // привести newStatus до Task['status'] безпечним способом
+  if (!['todo', 'in-progress', 'done'].includes(newStatus)) return;
+  const status = newStatus as Task['status'];
+
+  if (movedTask.status === status && movedTask.order === newOrder) return;
+
+  const updatePromises: Promise<Task>[] = [];
+
+  // Update moved task
+  updatePromises.push(tasksStore.updateTask(id, { status, order: newOrder }));
+
+  // Reorder new column
+  const tasksInNewStatus = projectTasks.value
+    .filter(t => t.status === status && t.id !== id)
+    .sort((a, b) => a.order - b.order);
+
+  tasksInNewStatus.forEach((t, index) => {
+    const calculatedOrder = index >= newOrder ? index + 1 : index;
+    if (t.order !== calculatedOrder) updatePromises.push(tasksStore.updateTask(Number(t.id), { order: calculatedOrder }));
+  });
+
+  // Reorder old column if changed status
+  if (movedTask.status !== status) {
+    const tasksInOldStatus = projectTasks.value
+      .filter(t => t.status === movedTask.status && t.id !== id)
+      .sort((a, b) => a.order - b.order);
+    tasksInOldStatus.forEach((t, index) => {
+      if (t.order !== index) updatePromises.push(tasksStore.updateTask(Number(t.id), { order: index }));
+    });
   }
 
   try {
-    // Find the moved task
-    const movedTask = projectTasks.value.find(task => task.id === taskId);
-    if (!movedTask) {
-      error('Task not found');
-      return;
-    }
-
-    const oldStatus = movedTask.status;
-    const oldOrder = movedTask.order;
-
-    // If task moved to the same position, do nothing
-    if (oldStatus === newStatus && oldOrder === newOrder) {
-      return;
-    }
-
-    // Collect all update promises
-    const updatePromises: Promise<any>[] = [];
-
-    // Update moved task
-    updatePromises.push(
-      tasksStore.updateTask(taskId, {
-        status: newStatus as 'todo' | 'in-progress' | 'done',
-        order: newOrder
-      })
-    );
-
-    // Reorder tasks in NEW status column
-    const tasksInNewStatus = projectTasks.value
-      .filter(task => task.status === newStatus && task.id !== taskId)
-      .sort((firstTask, secondTask) => firstTask.order - secondTask.order);
-
-    tasksInNewStatus.forEach((task, index) => {
-      const calculatedOrder = index >= newOrder ? index + 1 : index;
-      if (task.order !== calculatedOrder) {
-        updatePromises.push(
-          tasksStore.updateTask(task.id, { order: calculatedOrder })
-        );
-      }
-    });
-
-    // If moved between different statuses, reorder old status column
-    if (oldStatus !== newStatus) {
-      const tasksInOldStatus = projectTasks.value
-        .filter(task => task.status === oldStatus && task.id !== taskId)
-        .sort((firstTask, secondTask) => firstTask.order - secondTask.order);
-
-      tasksInOldStatus.forEach((task, index) => {
-        if (task.order !== index) {
-          updatePromises.push(
-            tasksStore.updateTask(task.id, { order: index })
-          );
-        }
-      });
-    }
-
     await Promise.all(updatePromises);
     success('Task moved successfully');
-  } catch (moveError) {
-    console.error('Failed to move task:', moveError);
+  } catch {
     error('Failed to move task');
   }
 }
 
-// Handle task order update in table (drag-and-drop)
-async function handleUpdateTaskOrder(tasks: Task[]) {
-  try {
-    const promises = tasks.map((task, index) => {
-      if (task.order !== index) {
-        return tasksStore.updateTask(task.id, { order: index });
-      }
-      return Promise.resolve();
-    });
 
+// -------------------------
+// Table task order update
+// -------------------------
+async function handleUpdateTaskOrder(tasks: Task[]) {
+  const promises = tasks.map((t, index) => {
+    if (t.order !== index) return tasksStore.updateTask(Number(t.id), { order: index });
+    return Promise.resolve(t);
+  });
+
+  try {
     await Promise.all(promises);
     success('Task order updated');
-  } catch (updateError) {
-    console.error('Error updating task order:', updateError);
+  } catch {
     error('Failed to update task order');
   }
 }
